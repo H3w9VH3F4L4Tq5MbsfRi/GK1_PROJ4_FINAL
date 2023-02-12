@@ -15,21 +15,31 @@ namespace GK1_PROJ4_FINAL
         private bool terminate;
         private Vector3 stationaryCamera = new Vector3(0.00001F, 0.00001F, -11);
         private static Vector3 cameraTarget = new Vector3(0, 0, 0);
-        private static Vector3 cameraVector = new Vector3(0, -1, -1);
+        private static Vector3 cameraVector = new Vector3(0, -1, 1);
         private const int maxVerticies = 3;
         private float pov = 1.047197176756411F;
-        private static (int x, int y, int z) light = (0, 0, 10);
+        private static Vector4 lightAbsolute = new Vector4(0, 0, 10, 1);
+        private (float x, float y, float z) light = (0, 0, 0);
         private static Vector3 lightColor = new Vector3(1, 1, 1);
         private static Vector3 vv = new Vector3(0, 0, 1);
-        private float currAngle = 0;
-        private const float angleStep = 0.1F;
-        private float dddd = 0;
-        private int colorStep = 2;
+        private Vector3 translationVector = new Vector3(0, 0, 0);
+        private int translationStage = 0;
+        private static int colorStep = 2;
+        private static float translationStep = 0.1F;
+        private float rotateAngle = 0;
+        private static float rotationStep = 0.174533F;
+        private static float deg90 = 1.5708F;
+        private Vector3 currPosition = new Vector3(5, 0, 0);
+        private bool tremorApplied = false;
+        private static float tremorStep = 0.0872665F;
+        private Vector3 targetPosition = new Vector3(0, 5, 2);
         public Form()
         {
             InitializeComponent();
             figures = new List<Figure>();
             terminate = false;
+            light.x = canvas.Width / 2;
+            light.y = canvas.Height / 2;
             drawArea = new Bitmap(canvas.Size.Width, canvas.Size.Height);
             canvas.Image = drawArea;
             using (Graphics g = Graphics.FromImage(drawArea))
@@ -131,7 +141,7 @@ namespace GK1_PROJ4_FINAL
             while (!terminate)
                 if (animationRbutton.Checked)
                 {
-                    if(dayNightRbutton.Checked)
+                    if (dayNightRbutton.Checked)
                     {
                         if (!dayNightReverse)
                         {
@@ -143,14 +153,13 @@ namespace GK1_PROJ4_FINAL
                         {
                             canvasColor = Color.FromArgb(canvasColor.A, canvasColor.R + colorStep, canvasColor.G + colorStep, canvasColor.B + colorStep);
                             if (canvasColor.R + colorStep > 255)
-                                dayNightReverse= false;
+                                dayNightReverse = false;
                         }
                     }
-                    dddd = dddd + 0.1F;
-                    currAngle = (float)(currAngle % (2 * Math.PI));
+                    moveObject();
                     repaint();
-                }  
-                
+                }
+
             return;
         }
         private void repaint()
@@ -158,8 +167,16 @@ namespace GK1_PROJ4_FINAL
             List<Figure> figuresMod = new List<Figure>();
 
             Matrix4x4 modelMatrix = Matrix4x4.CreateRotationX(0);
-            Matrix4x4 viewMatrix = Matrix4x4.CreateLookAt(stationaryCamera, cameraTarget, cameraVector);
+            Matrix4x4 viewMatrix;
+            if (camera1Rbutton.Checked)
+                viewMatrix = Matrix4x4.CreateLookAt(stationaryCamera, cameraTarget, cameraVector);
+            else if (camera2Rbutton.Checked)
+                viewMatrix = Matrix4x4.CreateLookAt(stationaryCamera, currPosition, cameraVector);
+            else
+                viewMatrix = Matrix4x4.CreateLookAt(currPosition, new Vector3(0,5,2), cameraVector);
+
             Matrix4x4 projectionMatrix = Matrix4x4.CreatePerspectiveFieldOfView(pov, (float)canvas.Width / (float)canvas.Height, 1, 9999999);
+            recalcLight(modelMatrix, viewMatrix, projectionMatrix);
 
             for (int i = 0; i < figures.Count - 1; i++)
             {
@@ -184,11 +201,11 @@ namespace GK1_PROJ4_FINAL
             }
 
             figuresMod.Add(new Figure(figures[figures.Count - 1].col, figures[figures.Count - 1].ks, figures[figures.Count - 1].kd, figures[figures.Count - 1].m));
-            Matrix4x4 modelMatrix2 = Matrix4x4.CreateTranslation(new Vector3(-dddd, dddd, 0));
+            Matrix4x4 moveModelMatrix = Matrix4x4.Multiply(Matrix4x4.CreateTranslation(translationVector), Matrix4x4.CreateRotationZ(rotateAngle, currPosition));
 
             foreach (var pe in figures[figures.Count - 1].polygons)
             {
-                Polygon p = calcViewPolygon(pe, modelMatrix2, viewMatrix, projectionMatrix);
+                Polygon p = calcViewPolygon(pe, moveModelMatrix, viewMatrix, projectionMatrix);
 
                 bool outOfBounds = false;
                 foreach (var v in p.verticies)
@@ -402,7 +419,7 @@ namespace GK1_PROJ4_FINAL
                         et.Add(ed.ymin, new List<Edge>());
                     et[ed.ymin].Add(ed);
                 }
-                if (gouraudsShadingRbutton.Checked)
+                if (!phongsShadingRbutton.Checked)
                 {
                     Vector3 n = normaliseVector(p.verticies[i].normal);
                     Vector3 l = normaliseVector(new Vector3(light.x - p.verticies[i].x, light.y - p.verticies[i].y, light.z - p.verticies[i].z));
@@ -459,7 +476,7 @@ namespace GK1_PROJ4_FINAL
                         {
                             if (phongsShadingRbutton.Checked)
                                 calculateAndPaintColor(p, j, curY, f, coefs, col, ks, kd, m);
-                            else
+                            else if (gouraudsShadingRbutton.Checked)
                             {
                                 Vector3 finalColor = new Vector3(0, 0, 0);
                                 for (int k = 0; k < p.verticies.Count; k++)
@@ -467,6 +484,19 @@ namespace GK1_PROJ4_FINAL
                                     finalColor.X += coefs[j, curY, k] * colors[k].X;
                                     finalColor.Y += coefs[j, curY, k] * colors[k].Y;
                                     finalColor.Z += coefs[j, curY, k] * colors[k].Z;
+                                }
+                                Color colorF = new Color();
+                                colorF = Color.FromArgb((byte)255, (byte)finalColor.X, (byte)finalColor.Y, (byte)finalColor.Z);
+                                f.SetPixel(j, curY, colorF);
+                            }
+                            else
+                            {
+                                Vector3 finalColor = new Vector3(0, 0, 0);
+                                for (int k = 0; k < p.verticies.Count; k++)
+                                {
+                                    finalColor.X += (1F / 3F) * colors[k].X;
+                                    finalColor.Y += (1F / 3F) * colors[k].Y;
+                                    finalColor.Z += (1F / 3F) * colors[k].Z;
                                 }
                                 Color colorF = new Color();
                                 colorF = Color.FromArgb((byte)255, (byte)finalColor.X, (byte)finalColor.Y, (byte)finalColor.Z);
@@ -489,6 +519,121 @@ namespace GK1_PROJ4_FINAL
         private void Form_FormClosing(object sender, FormClosingEventArgs e)
         {
             terminate = true;
+        }
+        private void moveObject()
+        {
+            switch (translationStage)
+            {
+                case 0:
+                    {
+                        translationVector.X -= translationStep;
+                        translationVector.Y += translationStep;
+                        currPosition.X -= translationStep;
+                        currPosition.Y += translationStep;
+                        targetPosition.X -= translationStep;
+                        targetPosition.Y += translationStep;
+
+                        if (translationVector.X < translationStep - 5 || translationVector.Y > 5 - translationStep)
+                            translationStage = 1;
+                        break;
+                    }
+                case 1:
+                    {
+                        rotateAngle += rotationStep;
+                        targetPosition.Y -= (rotationStep / deg90) * 10;
+
+                        if (rotateAngle > deg90 - rotationStep)
+                            translationStage = 2;
+                        break;
+                    }
+                case 2:
+                    {
+                        translationVector.X -= translationStep;
+                        translationVector.Y -= translationStep;
+                        currPosition.X -= translationStep;
+                        currPosition.Y -= translationStep;
+                        targetPosition.X -= translationStep;
+                        targetPosition.Y -= translationStep;
+
+                        if (translationVector.X < translationStep - 10 || translationVector.Y < translationStep)
+                            translationStage = 3;
+                        break;
+                    }
+                case 3:
+                    {
+                        rotateAngle += rotationStep;
+                        targetPosition.X += (rotationStep / deg90) * 10;
+
+                        if (rotateAngle > deg90 * 2 - rotationStep)
+                            translationStage = 4;
+                        break;
+                    }
+                case 4:
+                    {
+                        translationVector.X += translationStep;
+                        translationVector.Y -= translationStep;
+                        currPosition.X += translationStep;
+                        currPosition.Y -= translationStep;
+                        targetPosition.X += translationStep;
+                        targetPosition.Y -= translationStep;
+
+                        if (translationVector.X > translationStep - 5 || translationVector.Y < translationStep - 5)
+                            translationStage = 5;
+                        break;
+                    }
+                case 5:
+                    {
+                        rotateAngle += rotationStep;
+                        targetPosition.Y += (rotationStep / deg90) * 10;
+
+                        if (rotateAngle > deg90 * 3 - rotationStep)
+                            translationStage = 6;
+                        break;
+                    }
+                case 6:
+                    {
+                        translationVector.X += translationStep;
+                        translationVector.Y += translationStep;
+                        currPosition.X += translationStep;
+                        currPosition.Y += translationStep;
+                        targetPosition.X += translationStep;
+                        targetPosition.Y += translationStep;
+
+                        if (translationVector.X > -translationStep || translationVector.Y > -translationStep)
+                            translationStage = 7;
+                        break;
+                    }
+                case 7:
+                    {
+                        rotateAngle += rotationStep;
+                        targetPosition.X -= (rotationStep / deg90) * 10;
+
+                        if (rotateAngle > deg90 * 4)
+                        {
+                            translationStage = 0;
+                            rotateAngle = 0;
+                        }
+                        break;
+                    }
+            }
+            if (tremorRbutton.Checked || tremorApplied)
+            {
+                if (tremorApplied)
+                    rotateAngle -= tremorStep;
+                else
+                    rotateAngle += tremorStep;
+                tremorApplied = !tremorApplied;
+            }
+
+        }
+        private void recalcLight(Matrix4x4 modelMatrix, Matrix4x4 viewMatrix, Matrix4x4 projectionMatrix)
+        {
+            Vector4 newV = Vector4.Transform(lightAbsolute, modelMatrix);
+            newV = Vector4.Transform(newV, viewMatrix);
+            newV = Vector4.Transform(newV, projectionMatrix);
+            light.x = (canvas.Width / 2) * (newV.X / newV.W + 1);
+            light.y = (canvas.Height / 2) * (newV.Y / newV.W + 1);
+            light.z = newV.Z / newV.W;
         }
     }
     public class Vertex
